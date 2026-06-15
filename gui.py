@@ -15,19 +15,32 @@ except Exception:
 
 from othello_env import OthelloEnv
 from model import OthelloNet
-from mcts import MCTS
+from mcts_play import MCTS_Play
 
 class OthelloGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("AlphaZero Othello vs Human")
         
-        # 盤面の余白（座標用）を追加したため、ウィンドウサイズを少し拡大
-        self.root.geometry("580x840")
-        self.root.resizable(False, False)
-
+        # --- フルスクリーン用の設定 ---
+        self.is_fullscreen = False
+        self.root.bind("<F11>", self.toggle_fullscreen)
+        self.root.bind("<Escape>", self.end_fullscreen)
+        
+        # モニターの縦幅を取得し、UIの余白(約350px)を引いて盤面の大きさを自動計算
+        screen_height = self.root.winfo_screenheight()
+        self.cell_size = max(40, int((screen_height - 350) / 8))
+        self.offset = int(self.cell_size / 2)
+        self.board_size = self.cell_size * 8
+        self.canvas_size = self.board_size + (self.offset * 2)
+        
+        # 初期ウィンドウサイズを盤面に合わせて設定
+        self.root.geometry(f"{self.canvas_size + 100}x{self.canvas_size + 300}")
+        
+        # --- AIの設定（シミュレーション回数から秒数指定に変更） ---
         self.model_path = "current_model.pth"
-        self.num_simulations = 400
+        self.time_limit_sec = 3.0  # ★ AIの思考時間（秒）をここで一括管理！
+        
         self.mcts = None
         self.ai_color = None
         self.human_color = None
@@ -43,11 +56,25 @@ class OthelloGUI:
         self.root.update()
         self.load_ai()
 
+    def toggle_fullscreen(self, event=None):
+        """F11キーでフルスクリーンを切り替え"""
+        self.is_fullscreen = not self.is_fullscreen
+        self.root.attributes("-fullscreen", self.is_fullscreen)
+
+    def end_fullscreen(self, event=None):
+        """Escキーでフルスクリーンを解除"""
+        self.is_fullscreen = False
+        self.root.attributes("-fullscreen", False)
+
     def setup_ui(self):
-        control_frame = tk.Frame(self.root, pady=5)
+        # 全画面化したときに中央に配置するためのメインコンテナ
+        self.main_frame = tk.Frame(self.root)
+        self.main_frame.pack(expand=True)
+
+        control_frame = tk.Frame(self.main_frame, pady=5)
         control_frame.pack()
 
-        tk.Label(control_frame, text="手番を選んで対戦スタート", font=("Arial", 12)).pack(pady=2)
+        tk.Label(control_frame, text="手番を選んで対戦スタート (F11で全画面切替 / Escで解除)", font=("Arial", 12)).pack(pady=2)
         
         btn_frame = tk.Frame(control_frame)
         btn_frame.pack()
@@ -60,43 +87,32 @@ class OthelloGUI:
                                    command=lambda: self.start_game(pyrev.WHITE))
         self.btn_white.pack(side=tk.LEFT, padx=10)
 
-        # --- ★評価値UIレイアウト（ご要望の通りに修正） ---
-        self.eval_frame = tk.Frame(self.root, pady=10)
+        # 評価値UIレイアウト
+        self.eval_frame = tk.Frame(self.main_frame, pady=10)
         self.eval_frame.pack()
         
-        # 上段：形勢テキスト（真上に残す）
         self.eval_status_label = tk.Label(self.eval_frame, text="形勢: 互角", font=("Arial", 13, "bold"))
         self.eval_status_label.pack(side=tk.TOP, pady=(0, 5))
         
-        # 下段：[You 〇%] [=== バー ===] [〇% AI]
         self.bar_container = tk.Frame(self.eval_frame)
         self.bar_container.pack(side=tk.TOP)
 
-        # 左側（人間）
         self.human_pct_label = tk.Label(self.bar_container, text="You  50%", font=("Arial", 11, "bold"), fg="#0000cc", width=10, anchor="e")
         self.human_pct_label.pack(side=tk.LEFT, padx=5)
 
-        # 中央（バー本体: AIを赤背景、人間を青で左から塗る）
-        self.bar_width = 300
+        # バーの長さも画面サイズに合わせて調整
+        self.bar_width = int(self.canvas_size * 0.6)
         self.eval_canvas = tk.Canvas(self.bar_container, width=self.bar_width, height=22, bg="#ff4d4d", highlightthickness=1, highlightbackground="gray")
         self.eval_canvas.pack(side=tk.LEFT)
         self.eval_rect = self.eval_canvas.create_rectangle(0, 0, self.bar_width / 2, 22, fill="#4d79ff", width=0)
 
-        # 右側（AI）
         self.ai_pct_label = tk.Label(self.bar_container, text="50%  AI", font=("Arial", 11, "bold"), fg="#cc0000", width=10, anchor="w")
         self.ai_pct_label.pack(side=tk.LEFT, padx=5)
-        # -----------------------------------
 
-        self.info_label = tk.Label(self.root, text="モデルを読み込んでいます...", font=("Arial", 14, "bold"), fg="black")
+        self.info_label = tk.Label(self.main_frame, text="モデルを読み込んでいます...", font=("Arial", 14, "bold"), fg="black")
         self.info_label.pack(pady=5)
 
-        # 盤面描画用キャンバス（座標A-H, 1-8を描くための余白を設定）
-        self.cell_size = 60
-        self.board_size = self.cell_size * 8
-        self.offset = 30 # 盤面周りの余白（ここに座標を書く）
-        self.canvas_size = self.board_size + (self.offset * 2)
-        
-        self.canvas = tk.Canvas(self.root, width=self.canvas_size, height=self.canvas_size, bg="#ececec", highlightthickness=0)
+        self.canvas = tk.Canvas(self.main_frame, width=self.canvas_size, height=self.canvas_size, bg="#ececec", highlightthickness=0)
         self.canvas.pack()
         self.canvas.bind("<Button-1>", self.on_click)
 
@@ -119,7 +135,7 @@ class OthelloGUI:
     def start_game(self, human_color):
         self.human_color = human_color
         self.ai_color = pyrev.WHITE if human_color == pyrev.BLACK else pyrev.BLACK
-        self.mcts = MCTS(self.model)
+        self.mcts = MCTS_Play(self.model)
         
         self.env.reset()
         self.game_started = True
@@ -158,15 +174,12 @@ class OthelloGUI:
         human_percent = int(win_rate * 100)
         ai_percent = 100 - human_percent
 
-        # バーの長さを更新（左から人間=青が伸びる）
         human_bar_width = int(self.bar_width * win_rate)
         self.eval_canvas.coords(self.eval_rect, 0, 0, human_bar_width, 22)
 
-        # 左右のパーセンテージ表示を更新（ご要望のレイアウト）
         self.human_pct_label.config(text=f"You  {human_percent}%")
         self.ai_pct_label.config(text=f"{ai_percent}%  AI")
 
-        # 上部のテキストを更新
         if human_percent >= 55:
             self.eval_status_label.config(text="形勢: あなたの優勢", fg="#0000cc")
         elif human_percent <= 45:
@@ -177,31 +190,24 @@ class OthelloGUI:
     def draw_board(self):
         self.canvas.delete("all")
         
-        # 盤面の背景（緑）を描画（座標余白の内側）
         self.canvas.create_rectangle(self.offset, self.offset, 
                                      self.offset + self.board_size, self.offset + self.board_size, 
                                      fill="#006400", outline="black", width=2)
         
-        # --- ★追加：座標（A-H, 1-8）の描画 ---
         cols = "ABCDEFGH"
         rows = "12345678"
         for i in range(8):
-            # 上部のアルファベット (A-H)
             cx = self.offset + i * self.cell_size + self.cell_size / 2
             cy = self.offset / 2
             self.canvas.create_text(cx, cy, text=cols[i], font=("Arial", 11, "bold"), fill="black")
             
-            # 左部の数字 (1-8)
             cx2 = self.offset / 2
             cy2 = self.offset + i * self.cell_size + self.cell_size / 2
             self.canvas.create_text(cx2, cy2, text=rows[i], font=("Arial", 11, "bold"), fill="black")
         
-        # グリッド線の描画
         for i in range(1, 8):
-            # 縦線
             x = self.offset + i * self.cell_size
             self.canvas.create_line(x, self.offset, x, self.offset + self.board_size, fill="black")
-            # 横線
             y = self.offset + i * self.cell_size
             self.canvas.create_line(self.offset, y, self.offset + self.board_size, y, fill="black")
 
@@ -227,7 +233,6 @@ class OthelloGUI:
         coord = int(coord)
         col = coord % 8
         row = coord // 8
-        # 余白(offset)を足して中心座標を計算
         cx = self.offset + col * self.cell_size + self.cell_size / 2
         cy = self.offset + row * self.cell_size + self.cell_size / 2
         r = self.cell_size / 2 - 5
@@ -237,7 +242,6 @@ class OthelloGUI:
         coord = int(coord)
         col = coord % 8
         row = coord // 8
-        # 余白(offset)を足して中心座標を計算
         cx = self.offset + col * self.cell_size + self.cell_size / 2
         cy = self.offset + row * self.cell_size + self.cell_size / 2
         r = 5
@@ -275,7 +279,8 @@ class OthelloGUI:
             self.update_ui()
 
     def ai_worker(self):
-        visit_counts = self.mcts.search(self.env, self.num_simulations, is_self_play=False)
+        # ★ 変数化した思考時間（self.time_limit_sec）を渡して探索
+        visit_counts = self.mcts.search(self.env, time_limit_sec=self.time_limit_sec, is_self_play=False)
         action = np.argmax(visit_counts)
         self.root.after(0, self.apply_move, action)
 
@@ -286,11 +291,9 @@ class OthelloGUI:
         if self.env.position.side_to_move != self.human_color:
             return
 
-        # クリック座標から余白(offset)を引いてマスを計算
         col = int((event.x - self.offset) // self.cell_size)
         row = int((event.y - self.offset) // self.cell_size)
         
-        # 盤面の外（余白部分）をクリックした場合は無視
         if 0 <= col < 8 and 0 <= row < 8:
             action = row * 8 + col
             if action in self.env.get_legal_moves():

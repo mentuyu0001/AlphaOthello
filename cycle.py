@@ -30,7 +30,7 @@ def run_infinite_cycle():
     TOTAL_FILES_TARGET = 15        # プールしておく合計ファイル数
     FILES_TO_REPLACE = 3           # 1サイクルで入れ替えるファイル数
     NUM_GAMES_PER_FILE = 250       # 1ファイルあたりの試合数
-    NUM_SIMULATIONS = 200          # MCTSシミュレーション回数
+    NUM_SIMULATIONS = 500          # MCTSシミュレーション回数
     EPOCHS = 3                    # 学習のエポック数
     BATCH_SIZE = 1024              # 学習のバッチサイズ
     
